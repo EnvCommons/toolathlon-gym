@@ -306,11 +306,18 @@ class ToolathlonGym(Environment):
 
     def _pg_env(self) -> dict[str, str]:
         """Env additions that point any subprocess at this session's DB."""
+        # Pin user/password explicitly so MCP servers don't silently fall back
+        # to client-library defaults (e.g. node-postgres' postgres/postgres),
+        # which currently work only because pg_hba.conf is set to trust.
         return {
             "PGHOST": "localhost",
             "PG_HOST": "localhost",
             "PGDATABASE": self._db_name,
             "PG_DATABASE": self._db_name,
+            "PGUSER": "eigent",
+            "PG_USER": "eigent",
+            "PGPASSWORD": "camel",
+            "PG_PASSWORD": "camel",
         }
 
     async def _psql(self, sql: str, *, dbname: str = "postgres") -> None:
