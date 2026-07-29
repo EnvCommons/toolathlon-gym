@@ -71,6 +71,14 @@ def _resolve(value: str, workspace: str) -> str:
 
 # ── MCP Bridge — manages MCP server subprocesses per session ─────────────────
 
+# StreamReader buffer limit for MCP server stdout. asyncio's default is 64 KiB,
+# and a single JSON-RPC response line above it makes `readline()` raise
+# LimitOverrunError ("chunk exceed the limit"), which surfaces as an opaque
+# "MCP tool error" and makes bulk-listing tools (e.g. HowToCook getAllRecipes /
+# getRecipesByCategory) unusable. Raise the limit so large responses parse.
+_MCP_STREAM_LIMIT = 64 * 1024 * 1024  # 64 MiB
+
+
 def _make_request(method: str, params: dict | None = None, req_id: int = 1) -> bytes:
     msg: dict = {"jsonrpc": "2.0", "id": req_id, "method": method}
     if params is not None:
@@ -217,6 +225,7 @@ class MCPBridge:
                     stderr=asyncio.subprocess.PIPE,
                     env=full_env,
                     cwd=cwd,
+                    limit=_MCP_STREAM_LIMIT,
                 )
                 mcp_proc = _MCPProcess(name, proc)
                 await asyncio.sleep(1.5)  # let server boot
