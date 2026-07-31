@@ -17,6 +17,13 @@ RUN apt-get update && apt-get install -y \
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
+# Unprivileged account used to run agent-submitted code (python_execute). The
+# env server itself stays root (it needs to drive postgres, MCP subprocesses,
+# and the eval harness), but anything that executes code the *agent* wrote
+# must not run as root or it can read task_dir — including
+# groundtruth_workspace — straight off disk instead of doing the task.
+RUN useradd --no-create-home --uid 1500 --shell /usr/sbin/nologin sandbox
+
 # Node.js 22
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
@@ -116,6 +123,12 @@ COPY server.py /app/server.py
 COPY discover_tools.py /app/discover_tools.py
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+
+# /app/tasks holds docs/main.py and groundtruth_workspace for every task —
+# the eval answers. Only root (the env server) ever needs to read these; the
+# sandbox user that runs agent code must get zero access, even by absolute
+# path, so python_execute can't be used to read the answer key.
+RUN chown -R root:root /app/tasks && chmod -R go-rwx /app/tasks
 
 # Bake the seed and the MCP tool catalog into the image:
 #   1. Restore init.sql.gz into `toolathlon_template`.
