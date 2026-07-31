@@ -48,6 +48,12 @@ CONFIGS_DIR = Path("/app/configs/mcp_servers")
 LOCAL_SERVERS = "/opt/local_servers"
 TOOL_SCHEMAS_FILE = Path("/app/tool_schemas.json")
 
+# Unprivileged OS user (created in the Dockerfile) that agent-submitted code
+# runs as. /app/tasks — including groundtruth_workspace — is chmod'd to be
+# unreadable by anyone but root, so this user has no path, absolute or
+# relative, to the eval answers.
+SANDBOX_USER = "sandbox"
+
 CATALOG_DESC_MAX_CHARS = 160
 
 # ── Load pre-discovered tool schemas ─────────────────────────────────────────
@@ -387,6 +393,16 @@ class ToolathlonGym(Environment):
         for subdir in ["arxiv_local_storage", "memory", ".playwright_output"]:
             (self.workspace_dir / subdir).mkdir(exist_ok=True)
 
+        # python_execute runs agent code as the unprivileged `sandbox` user
+        # (see SANDBOX_USER), so it needs read/write access to everything
+        # populated into the workspace so far. Content MCP servers write
+        # later inherits default (world-readable) permissions, so this
+        # one-time grant is enough.
+        chmod_proc = await asyncio.create_subprocess_exec(
+            "chmod", "-R", "o+rwX", str(self.workspace_dir),
+        )
+        await chmod_proc.wait()
+
         # Run preprocess script
         # Note: some preprocess scripts spawn background servers (e.g. http.server)
         # that inherit pipes, so we must not use communicate() which waits for EOF.
@@ -631,6 +647,9 @@ class ToolathlonGym(Environment):
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
             output = stdout.decode() + stderr.decode()
 
+            # Per the README's Reward Structure: reward is binary, 1.0 if
+            # all checks pass (the eval script's own exit code), 0.0
+            # otherwise — not the underlying accuracy score.
             if proc.returncode == 0:
                 return ToolOutput(
                     blocks=[TextBlock(text=f"PASS\n{output}")],
@@ -668,7 +687,16 @@ class ToolathlonGym(Environment):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(self.workspace_dir),
-                env={**os.environ, **self._pg_env()},
+                # Agent-submitted code must not inherit the env server's root
+                # privileges — without this it can read anything on disk,
+                # including this task's groundtruth_workspace. Drop to the
+                # unprivileged sandbox user/group and shed root's
+                # supplementary groups; HOME is repointed since sandbox
+                # can't write to root's home.
+                user=SANDBOX_USER,
+                group=SANDBOX_USER,
+                extra_groups=[],
+                env={**os.environ, **self._pg_env(), "HOME": str(self.workspace_dir)},
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
             output = stdout.decode()
